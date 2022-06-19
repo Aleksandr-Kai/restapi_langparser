@@ -4,28 +4,40 @@ import (
 	"restapi_langparser/internal/model"
 )
 
-type LangSource int
-
 type IProxyRepository interface {
-	Add(list []model.Proxy) error
-	List(limit, offset int) ([]model.Proxy, error)
-	Remove(ids []int) error
+	Create(list []model.Proxy) error
+	Read(limit, offset int) ([]model.Proxy, error)
 	Update(list []model.Proxy) error
+	Delete(ids []int) error
 }
 
 type IDomainRepository interface {
-	Add(domain model.Domain) (int64, error)
-	List(limit, offset int64) ([]model.Domain, error)
-	Remove(ids []int64) error
-	Update(list []model.Domain) error
+	Create(domains ...model.Domain) error
+	Read(limit, offset int) ([]model.Domain, error)
+	Update(target model.Domain) error
+	Delete(target ...model.Domain) error
 
-	FindByID(id int64) (*model.Domain, error)
-	FindByLang(lang string, from LangSource) ([]model.Domain, error)
-	FindByHost(host string) (*model.Domain, error)
+	FindByID(id int) (*model.Domain, error)
+	FindByTagLang(lang string) ([]model.Domain, error)
+	FindBySMLang(lang string) ([]model.Domain, error)
+	FindByContentLang(lang string) ([]model.Domain, error)
+	FindByHost(hosts ...string) ([]model.Domain, error)
+	GetUserRequest() (*model.Domain, error)
+	GetErrorHost() (*model.Domain, error)
+	GetListHost() (*model.Domain, error)
+	CreateWithHost(from string, hosts ...string) ([]model.Domain, error)
 }
 
 type IStore interface {
 	Migrate() error
+
 	Proxy() IProxyRepository
 	Domain() IDomainRepository
+
+	AddDomains(list *[]model.Domain) error
+	GetDomains(hosts []string) ([]model.Domain, error)
+	GetFromQueue() *model.Domain
+	SaveDomain(domain model.Domain) error
+	CreateRequest(list []model.Domain, callback *string) (requestCode string, err error)
+	GetRequest(requestCode string) ([]model.Domain, error)
 }

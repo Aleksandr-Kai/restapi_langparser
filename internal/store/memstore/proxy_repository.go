@@ -71,3 +71,11 @@ func (p *ProxyRepository) Remove(ids []int) error {
 func (p *ProxyRepository) Update(list []model.Proxy) error {
 	return nil
 }
+
+func (p *ProxyRepository) FindByID(id int64) (*model.Proxy, error) {
+	domain, exists := p.store[int(id)]
+	if !exists {
+		return nil, fmt.Errorf("record with id=%d not found", id)
+	}
+	return &domain, nil
+}

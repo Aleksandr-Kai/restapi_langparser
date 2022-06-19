@@ -2,14 +2,11 @@ package apiserver
 
 import (
 	"github.com/gin-gonic/gin"
-	"github.com/sirupsen/logrus"
 	"net/http"
 	"restapi_langparser/internal/apistructs"
 	"restapi_langparser/internal/config"
-	"restapi_langparser/internal/langfinder"
 	"restapi_langparser/internal/model"
 	"restapi_langparser/internal/store"
-	"strconv"
 )
 
 type ctxKey int8
@@ -17,14 +14,14 @@ type ctxKey int8
 type server struct {
 	router *gin.Engine
 	store  store.IStore
-	finder *langfinder.LangFinder
+	//finder *langfinder.LangFinder
 }
 
 func newServer(store store.IStore, config *config.Config) *server {
 	s := &server{
 		router: gin.New(),
 		store:  store,
-		finder: langfinder.New(store, config),
+		//finder: langfinder.New(store, config),
 	}
 	s.configureRouter()
 	return s
@@ -34,8 +31,7 @@ func (s *server) configureRouter() {
 	s.router.Use(gin.Recovery())
 	s.router.POST("/domains", s.handleAddDomains)
 	s.router.GET("/domains", s.handleGetDomains)
-	s.router.GET("/domains/:id", s.handleGetDomain)
-	s.router.GET("/results/:code", s.handleGetResult)
+	s.router.GET("/domains/:code", s.handleGetResult)
 	s.router.PATCH("/domains/:id", s.handleUpdateDomain)
 	s.router.DELETE("/domains/:id", s.handleDeleteDomain)
 
@@ -62,7 +58,7 @@ func (s *server) handleGetResult(c *gin.Context) {
 
 	status = http.StatusOK
 
-	res, err := s.finder.GetResult(c.Param("code"))
+	res, err := s.store.GetRequest(c.Param("code"))
 	if err != nil {
 		resp.CreateErrorf(err.Error())
 		return
@@ -72,46 +68,47 @@ func (s *server) handleGetResult(c *gin.Context) {
 	}
 }
 
+// handleGetDomains returns domains at the user's request
 func (s *server) handleGetDomains(c *gin.Context) {
-	logrus.Infof("Request [domain list] from %v", c.ClientIP())
+	var req apistructs.APIRequest
 	resp := &apistructs.APIResponse{}
 	status := http.StatusInternalServerError
 	defer func() {
 		c.String(status, resp.String())
 	}()
 
-	status = http.StatusOK
-	domains, err := s.store.Domain().List(0, 0)
-	if err != nil {
-		resp.CreateErrorf(err.Error())
+	if err := c.BindJSON(&req); err != nil {
+		resp.CreateErrorf("Internal error: %s", err.Error())
+		status = http.StatusInternalServerError
 		return
 	}
-	resp.Results = &apistructs.APIResults{
-		Domains: domains,
-	}
-}
-
-func (s *server) handleGetDomain(c *gin.Context) {
-	resp := &apistructs.APIResponse{}
-	status := http.StatusInternalServerError
-	defer func() {
-		c.String(status, resp.String())
-	}()
 
 	status = http.StatusOK
-	id, err := strconv.Atoi(c.Param("id"))
+
+	resp.Results = &apistructs.APIResults{}
+	domains, err := s.store.GetDomains(req.Hosts)
 	if err != nil {
-		resp.CreateErrorf("Incorrect ID (%s)", err.Error())
+		status = http.StatusInternalServerError
+		resp.CreateErrorf("Storage fail: %s", err.Error())
 		return
 	}
-	domain, err := s.store.Domain().FindByID(int64(id))
+
+	resp.Results.RequestCode, err = s.store.CreateRequest(domains, req.Callback)
 	if err != nil {
-		resp.CreateErrorf(err.Error())
+		status = http.StatusInternalServerError
+		resp.CreateErrorf("Storage fail: %s", err.Error())
 		return
 	}
-	resp.Results = &apistructs.APIResults{
-		Domains: []model.Domain{*domain},
+
+	if len(domains) == 0 {
+		domains = model.CreateDomainsList(req.Hosts)
+		if err = s.store.AddDomains(&domains); err != nil {
+			status = http.StatusInternalServerError
+			resp.CreateErrorf("Storage fail: %s", err.Error())
+		}
+		return
 	}
+	resp.Results.Domains = domains
 }
 
 func (s *server) handleUpdateDomain(c *gin.Context) {
@@ -150,12 +147,13 @@ func (s *server) handleAddDomains(c *gin.Context) {
 		return
 	}
 
-	status = http.StatusOK
-	resp.CreateMessagef("request code")
-	//todo make request and parse languages
-	resp.Results = &apistructs.APIResults{
-		RequestCode: s.finder.NewTask(req.Callback, req.URLs...),
+	domains := model.CreateDomainsList(req.Hosts)
+	if err := s.store.AddDomains(&domains); err != nil {
+		status = http.StatusInternalServerError
+		resp.CreateErrorf("Storage fail: %s", err.Error())
+		return
 	}
+	status = http.StatusOK
 }
 
 func (s *server) handleAddProxy(c *gin.Context) {
@@ -172,24 +170,12 @@ func (s *server) handleAddProxy(c *gin.Context) {
 		return
 	}
 
-	proxyList := make([]model.Proxy, len(request.URLs))
-	for i, url := range request.URLs {
-		proxyList[i] = model.Proxy{
-			URL: url,
-		}
-	}
-	err := s.store.Proxy().Add(proxyList)
+	err := s.store.Proxy().Create(request.Proxy)
 	if err != nil {
 		resp.CreateErrorf(err.Error())
 		return
 	}
 
-	lst, err := s.store.Proxy().List(0, 0)
-	if err != nil {
-		resp.CreateErrorf(err.Error())
-		return
-	}
-	resp.CreateMessagef("proxy %v", lst)
 	status = http.StatusOK
 }
 
@@ -200,7 +186,7 @@ func (s *server) handleGetProxyList(c *gin.Context) {
 		c.String(status, resp.String())
 	}()
 
-	lst, err := s.store.Proxy().List(0, 0)
+	lst, err := s.store.Proxy().Read(0, 0)
 	if err != nil {
 		resp.CreateErrorf(err.Error())
 		return

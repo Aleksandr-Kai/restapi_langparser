@@ -3,7 +3,7 @@ package apiserver
 import (
 	"errors"
 	"restapi_langparser/internal/config"
-	"restapi_langparser/internal/store/memstore"
+	"restapi_langparser/internal/model"
 	"restapi_langparser/internal/store/sqlstore"
 
 	"gorm.io/driver/postgres"
@@ -15,7 +15,7 @@ func Start(cfg *config.Config) error {
 
 	switch cfg.Type {
 	case config.MemStore:
-		srv = newServer(memstore.New(), cfg)
+		//srv = newServer(memstore.New(), cfg)
 	case config.SQLStore:
 		db, err := newDBConnection(cfg.DatabaseURL)
 		if err != nil {
@@ -40,6 +40,6 @@ func newDBConnection(databaseURL string) (*gorm.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-
+	err = db.AutoMigrate(&model.Domain{}, &model.Proxy{}, &model.Request{})
 	return db, nil
 }

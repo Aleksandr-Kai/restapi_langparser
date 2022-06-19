@@ -18,9 +18,7 @@ type APIResults struct {
 	RequestCode string         `json:"RequestCode,omitempty"`
 }
 
-type APIMessage struct {
-	Text string
-}
+type APIMessage string
 
 func CreateFromJSON(str string) (*APIResponse, error) {
 	res := &APIResponse{}
@@ -32,15 +30,13 @@ func CreateFromJSON(str string) (*APIResponse, error) {
 }
 
 func (r *APIResponse) CreateErrorf(format string, arguments ...interface{}) {
-	r.Error = &APIMessage{
-		Text: fmt.Sprintf(format, arguments...),
-	}
+	msg := APIMessage(fmt.Sprintf(format, arguments...))
+	r.Error = &msg
 }
 
 func (r *APIResponse) CreateMessagef(format string, arguments ...interface{}) {
-	r.Message = &APIMessage{
-		Text: fmt.Sprintf(format, arguments...),
-	}
+	msg := APIMessage(fmt.Sprintf(format, arguments...))
+	r.Message = &msg
 }
 
 func (r *APIResponse) String() string {

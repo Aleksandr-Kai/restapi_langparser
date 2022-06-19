@@ -1,41 +1,94 @@
 package model
 
 import (
+	"errors"
 	validation "github.com/go-ozzo/ozzo-validation"
 	"github.com/go-ozzo/ozzo-validation/is"
+	"gorm.io/gorm"
+	"strings"
+)
+
+const (
+	ResponseOk       = "ok"
+	ResponseBan      = "ban"
+	ResponseNotExist = "not exist"
+	ResponseError    = "error"
+	ResponseNull     = ""
+
+	langSeparator = ","
 )
 
 type Domain struct {
-	ID                  int64          `json:"id" gorm:"primaryKey;column:id"`
-	URL                 string         `json:"url" gorm:"column:url;unique"`
-	ResponseCode        uint8          `json:"response_code" gorm:"column:response_code"`
-	ErrorCount          uint           `json:"error_count" gorm:"column:error_count"`
-	ContentLanguage     string         `json:"content_lang" gorm:"column:content_lang"`
-	TabTagsLanguages    []TagsLangs    `json:"-" gorm:"foreignKey:DomainID"`
-	TagsLanguages       []string       `json:"tag_languages" gorm:"-"`
-	TabSitemapLanguages []SitemapLangs `json:"-" gorm:"foreignKey:DomainID"`
-	SitemapLanguages    []string       `json:"sitemap_languages" gorm:"-"`
-	BlockerName         string         `json:"blocker_name" gorm:"column:blocker_name"`
-	IP                  string         `json:"ip" gorm:"column:ip"`
+	gorm.Model               `json:"-"`
+	Host                     string    `json:"host" gorm:"column:host;unique"`
+	ResponseCode             string    `json:"responseCode" gorm:"column:response_code"`
+	ErrorCount               int       `json:"errorCount" gorm:"column:error_count"`
+	ContentLanguage          string    `json:"contentLang" gorm:"column:content_lang"`
+	TagsLanguages            []string  `json:"tagLanguages,omitempty" gorm:"-"`
+	SitemapLanguages         []string  `json:"sitemapLanguages,omitempty" gorm:"-"`
+	BlockerName              string    `json:"blockerName,omitempty" gorm:"column:blocker_name"`
+	IP                       string    `json:"ip" gorm:"column:ip"`
+	TagsLanguagesInternal    string    `json:"-" gorm:"column:tags_languages"`
+	SitemapLanguagesInternal string    `json:"-" gorm:"column:sitemap_languages"`
+	Requests                 []Request `json:"-" gorm:"foreignKey:DomainID;constraint:OnDelete:CASCADE;"`
+	Queue                    Queue     `json:"-" gorm:"foreignKey:DomainID;constraint:OnDelete:CASCADE;"`
 }
 
 func (d *Domain) Validate() error {
 	return validation.ValidateStruct(
 		d,
 		validation.Field(&d.ID, validation.Required, validation.Min(0)),
-		validation.Field(&d.URL, validation.Required, is.URL),
+		validation.Field(&d.Host, validation.Required, is.URL),
 		validation.Field(&d.IP, is.IP),
 	)
 }
 
-func (d *Domain) LanguagesAsStrings() {
-	d.TagsLanguages = make([]string, len(d.TabSitemapLanguages))
-	for ind := range d.TabSitemapLanguages {
-		d.TagsLanguages[ind] = d.TabSitemapLanguages[ind].Lang
+func (d *Domain) languagesToString() {
+	d.TagsLanguagesInternal = strings.ToUpper(strings.Join(d.TagsLanguages, langSeparator))
+	d.SitemapLanguagesInternal = strings.ToUpper(strings.Join(d.SitemapLanguages, langSeparator))
+}
+
+func (d *Domain) languagesToSlice() {
+	if d.TagsLanguagesInternal != "" {
+		d.TagsLanguages = strings.Split(d.TagsLanguagesInternal, langSeparator)
+	}
+	if d.SitemapLanguagesInternal != "" {
+		d.SitemapLanguages = strings.Split(d.SitemapLanguagesInternal, langSeparator)
+	}
+}
+
+func (d *Domain) BeforeCreate(*gorm.DB) (err error) {
+	if d.Host == "" {
+		return errors.New("empty host")
+	}
+	return nil
+}
+
+func (d *Domain) BeforeUpdate(*gorm.DB) (err error) {
+	err = validation.ValidateStruct(
+		d,
+		validation.Field(&d.ContentLanguage, validation.RuneLength(0, 2)),
+		validation.Field(&d.TagsLanguages, validation.Each(validation.RuneLength(0, 2))),
+		validation.Field(&d.SitemapLanguages, validation.Each(validation.RuneLength(0, 2))),
+	)
+	if err != nil {
+		return err
 	}
 
-	d.SitemapLanguages = make([]string, len(d.TabSitemapLanguages))
-	for ind := range d.TabSitemapLanguages {
-		d.SitemapLanguages[ind] = d.TabSitemapLanguages[ind].Lang
+	d.languagesToString()
+
+	return nil
+}
+
+func (d *Domain) AfterFind(*gorm.DB) (err error) {
+	d.languagesToSlice()
+	return nil
+}
+
+func CreateDomainsList(hosts []string) []Domain {
+	domains := make([]Domain, len(hosts))
+	for i, host := range hosts {
+		domains[i].Host = host
 	}
+	return domains
 }
