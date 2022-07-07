@@ -1,10 +1,11 @@
 package sqlstore
 
 import (
-	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 	"restapi_langparser/internal/model"
 	"strings"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type DomainRepository struct {
@@ -25,15 +26,18 @@ func (d *DomainRepository) Create(domains ...model.Domain) error {
 }
 
 func (d *DomainRepository) Update(target model.Domain) error {
-	if target.ID == 0 {
-		domains, err := d.FindByHost(target.Host)
-		if err != nil {
-			return err
-		}
-		target.ID = domains[0].ID
+	tx := d.db.Omit("id")
+
+	switch {
+	case target.ID == 0 && target.Host != "":
+		var id int64
+		d.db.Table("domains").Select("id").Where("host=?", target.Host).Scan(&id)
+		target.ID = uint(id)
+	case target.ID > 0 && target.Host == "":
+		tx = tx.Omit("host")
 	}
 
-	return d.db.Save(&target).Error
+	return tx.Save(&target).Error
 }
 
 func (d *DomainRepository) Read(limit, offset int) ([]model.Domain, error) {
@@ -43,8 +47,8 @@ func (d *DomainRepository) Read(limit, offset int) ([]model.Domain, error) {
 		Preload(clause.Associations).
 		Limit(limit).
 		Offset(offset).
+		Order("id").
 		Find(&domains).
-		Group("id").
 		Error
 	if err != nil {
 		return nil, err
@@ -145,7 +149,7 @@ func (d *DomainRepository) FindByHost(hosts ...string) ([]model.Domain, error) {
 	return domains, nil
 }
 
-func (d *DomainRepository) CreateWithHost(from string, hosts ...string) ([]model.Domain, error) {
+func (d *DomainRepository) CreateWithHost(hosts ...string) ([]model.Domain, error) {
 	domains := make([]model.Domain, 0)
 	for _, host := range hosts {
 		domains = append(domains, model.Domain{Host: host})
