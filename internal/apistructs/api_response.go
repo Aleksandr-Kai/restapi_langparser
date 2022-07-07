@@ -10,6 +10,7 @@ type APIResponse struct {
 	Message *APIMessage `json:"Message,omitempty"`
 	Error   *APIMessage `json:"Error,omitempty"`
 	Results *APIResults `json:"Results,omitempty"`
+	Status  int         `json:"-"`
 }
 
 type APIResults struct {
@@ -29,13 +30,13 @@ func CreateFromJSON(str string) (*APIResponse, error) {
 	return res, nil
 }
 
-func (r *APIResponse) CreateErrorf(format string, arguments ...interface{}) {
-	msg := APIMessage(fmt.Sprintf(format, arguments...))
+func (r *APIResponse) CreateError(format string, args ...interface{}) {
+	msg := APIMessage(fmt.Sprintf(format, args...))
 	r.Error = &msg
 }
 
-func (r *APIResponse) CreateMessagef(format string, arguments ...interface{}) {
-	msg := APIMessage(fmt.Sprintf(format, arguments...))
+func (r *APIResponse) CreateMessage(format string, args ...interface{}) {
+	msg := APIMessage(fmt.Sprintf(format, args...))
 	r.Message = &msg
 }
 
