@@ -40,6 +40,6 @@ func newDBConnection(databaseURL string) (*gorm.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	err = db.AutoMigrate(&model.Domain{}, &model.Proxy{}, &model.Request{})
-	return db, nil
+	err = db.AutoMigrate(&model.Domain{}, &model.Proxy{}, &model.Request{}, &model.Queue{})
+	return db, err
 }
