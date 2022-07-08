@@ -11,6 +11,39 @@ import (
 	"restapi_langparser/internal/model"
 	"restapi_langparser/internal/store"
 	"strings"
+	"sync"
+	"time"
+)
+
+const (
+	BadDomain = `select d.* from domains d
+					left join queues q on d.id=q.domain_id
+					left join requests r on d.id=r.domain_id
+					where not q.domain_id isnull
+					and d.response_code != ''
+					and q.update_at<now()
+					and q.deleted_at isnull
+					order by q.update_at
+					limit 1`
+	UserRequest = `select d.* from domains d
+					left join queues q on d.id=q.domain_id
+					left join requests r on d.id=r.domain_id
+					where not q.domain_id isnull
+					and not r.code isnull
+					and d.response_code=''
+					and q.deleted_at isnull
+					order by q.update_at
+					limit 1`
+	Queue = `select d.* from domains d
+					left join queues q on d.id=q.domain_id
+					left join requests r on d.id=r.domain_id
+					where not q.domain_id isnull
+					and d.response_code=''
+					and q.update_at<now()
+					and r.code isnull
+					and q.deleted_at isnull
+					order by q.update_at
+					limit 1`
 )
 
 type Store struct {
@@ -18,6 +51,7 @@ type Store struct {
 	ProxyRepository  store.IProxyRepository
 	DomainRepository store.IDomainRepository
 	callbacks        map[string]string
+	m                sync.Mutex
 }
 
 func New(db *gorm.DB) store.IStore {
@@ -42,11 +76,17 @@ func (s *Store) Domain() store.IDomainRepository {
 	return s.DomainRepository
 }
 
+// AddDomains create new domains and add it to queue
 func (s *Store) AddDomains(list *[]model.Domain) error {
-	err := s.db.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "host"}},
-		DoUpdates: clause.AssignmentColumns([]string{"host"}),
-	}).Clauses(clause.Returning{}).Create(&list).Error
+	s.m.Lock()
+	defer s.m.Unlock()
+
+	err := s.db.
+		Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "host"}},
+			//DoUpdates: clause.AssignmentColumns([]string{"host"}),
+			DoNothing: true,
+		}).Clauses(clause.Returning{}).Create(&list).Error
 	if err != nil {
 		return err
 	}
@@ -59,6 +99,7 @@ func (s *Store) AddDomains(list *[]model.Domain) error {
 		}
 		queue = append(queue, model.Queue{
 			DomainID: td.ID,
+			UpdateAt: time.Now(),
 		})
 	}
 	if len(queue) == 0 {
@@ -82,72 +123,66 @@ func (s *Store) GetDomains(hosts []string) ([]model.Domain, error) {
 	return domains, nil
 }
 
+// SaveDomain
 func (s *Store) SaveDomain(domain model.Domain) error {
-	if err := s.db.Save(&domain).Error; err != nil {
-		return err
-	}
-
-	if domain.ResponseCode == model.ResponseOk { // remove from queue if no errors
-		if err := s.RemoveFromQueue(domain); err != nil {
-			return fmt.Errorf("failed to delete from queue: %w", err)
-		}
-	} else if err := s.ReturnToQueue(domain); err != nil { // return to queue if errors
-		return fmt.Errorf("failed to add to queue: %w", err)
-	}
-	return nil
+	return s.db.Save(&domain).Error
 }
 
-func (s *Store) GetFromQueue() *model.Domain {
+func (s *Store) GetCompletedRequests(domain model.Domain) ([]string, error) {
+	var codes []string
+	err := s.db.Raw(`select r.code from requests r
+		left join queues q on r.domain_id=q.domain_id
+		left join domains d on d.id=r.domain_id
+		left join (select code from requests where domain_id=?) c on c.code=r.code
+		group by r.code
+		having count(q.domain_id)=0`, domain.ID).Scan(&codes).Error
+	return codes, err
+}
+
+func (s *Store) GetCallbacks(codes []string) map[string]string {
+	res := make(map[string]string)
+	for _, code := range codes {
+		if callback, exist := s.callbacks[code]; exist {
+			res[code] = callback
+		}
+	}
+	return res
+}
+
+//todo remove it
+func (s *Store) Test() {
+	s.callbacks["fddc1482c9d29f47961855ec9bacc9aa"] = "localhost:8080/echo"
+	testDomain := model.Domain{}
+	testDomain.ID = 1
+	callbacks, err := s.GetCompletedRequests(testDomain)
+	if err != nil {
+		logrus.Error(err)
+		return
+	}
+	logrus.Infof("found callbacks: %v", callbacks)
+}
+
+func (s *Store) GetFromQueue(priority string) *model.Domain {
 	var domain model.Domain
 
-	err := s.db.Transaction(func(tx *gorm.DB) error {
-		var task model.Queue
-
-		// get USER request queue
-		err := tx.Joins("left join requests on requests.domain_id=queues.domain_id").Find(&task).Error
-		if err != nil {
-			return err
-		}
-
-		if task.DomainID == 0 {
-			// get LIST queue
-			err = tx.Joins("left join requests on requests.domain_id=queues.domain_id where requests.domain_id is null order by queues.domain_id").Find(&task).Error
-			if err != nil {
-				return err
-			}
-		}
-
-		if task.DomainID == 0 {
-			return errors.New("queue empty")
-		}
-
-		err = tx.Where("domain_id=?", task.DomainID).Delete(&task).Error
-		if err != nil {
-			return err
-		}
-
-		err = tx.Find(&domain, task.DomainID).Error
-		if err != nil {
-			return err
-		}
-
-		if domain.ID == 0 {
-			return errors.New("queue empty")
-		}
+	err := s.db.Raw(priority).Scan(&domain).Error
+	if err != nil || domain.ID == 0 {
 		return nil
-	})
+	}
+
+	err = s.db.Where("domain_id=?", domain.ID).Delete(&model.Queue{}).Error
 	if err != nil {
-		logrus.Warning(err)
 		return nil
 	}
 
 	return &domain
 }
 
-func (s *Store) AddToQueue(list ...model.Domain) error {
+func (s *Store) AddToQueue(updateAt time.Time, list ...model.Domain) error {
 	q := make([]model.Queue, len(list))
 	for i, domain := range list {
 		q[i].DomainID = domain.ID
+		q[i].UpdateAt = updateAt
 	}
 	return s.db.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "domain_id"}},
@@ -155,14 +190,21 @@ func (s *Store) AddToQueue(list ...model.Domain) error {
 	}).Create(&q).Error
 }
 
-func (s *Store) ReturnToQueue(domain model.Domain) error {
-	return s.db.Unscoped().Model(&model.Queue{}).Where("domain_id", domain.ID).Update("deleted_at", nil).Error
+func (s *Store) ReturnToQueue(updateAt time.Time, domain model.Domain) error {
+	return s.db.
+		Unscoped().
+		Model(&model.Queue{}).
+		Where("domain_id", domain.ID).
+		Updates(map[string]interface{}{"deleted_at": nil, "update_at": updateAt}).
+		Error
 }
 
 func (s *Store) RemoveFromQueue(domain model.Domain) error {
-	return s.db.Unscoped().Delete(&model.Queue{
-		DomainID: domain.ID,
-	}).Error
+	return s.db.
+		Unscoped().
+		Where("domain_id=?", domain.ID).
+		Delete(&model.Queue{}).
+		Error
 }
 
 func createRequestCode(list []model.Domain) string {
