@@ -2,6 +2,7 @@ package store
 
 import (
 	"restapi_langparser/internal/model"
+	"time"
 )
 
 type IProxyRepository interface {
@@ -25,7 +26,7 @@ type IDomainRepository interface {
 	GetUserRequest() (*model.Domain, error)
 	GetErrorHost() (*model.Domain, error)
 	GetListHost() (*model.Domain, error)
-	CreateWithHost(from string, hosts ...string) ([]model.Domain, error)
+	CreateWithHost(hosts ...string) ([]model.Domain, error)
 }
 
 type IStore interface {
@@ -34,10 +35,20 @@ type IStore interface {
 	Proxy() IProxyRepository
 	Domain() IDomainRepository
 
+	// AddDomains create new domains and add it to queue
 	AddDomains(list *[]model.Domain) error
 	GetDomains(hosts []string) ([]model.Domain, error)
-	GetFromQueue() *model.Domain
+	GetFromQueue(priority string) *model.Domain
 	SaveDomain(domain model.Domain) error
 	CreateRequest(list []model.Domain, callback *string) (requestCode string, err error)
 	GetRequest(requestCode string) ([]model.Domain, error)
+
+	GetCompletedRequests(domain model.Domain) ([]string, error)
+	GetCallbacks(codes []string) map[string]string
+
+	AddToQueue(updateAt time.Time, list ...model.Domain) error
+	ReturnToQueue(updateAt time.Time, domain model.Domain) error
+	RemoveFromQueue(domain model.Domain) error
+
+	Test()
 }
